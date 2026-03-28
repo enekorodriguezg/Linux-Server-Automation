@@ -52,3 +52,6 @@ A diferencia de un script de configuración rígida, esta herramienta permite de
 ---
 
 **Nota Final:** Este software se ha desarrollado con fines de automatización de entornos de staging y producción inicial. Tras su ejecución, se recomienda encarecidamente revisar las políticas de firewall (UFW/Iptables) y asegurar que solo los puertos necesarios (80/443/SSH) permanezcan expuestos al tráfico externo.
+
+## ⚖️ Licencia
+Este proyecto está bajo la Licencia MIT. Consulta el archivo [LICENSE](LICENSE) para más detalles.
