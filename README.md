@@ -1,6 +1,6 @@
 # Linux Server Auto-Provisioning & Deployment Tool (IaC)
 
-Este proyecto es una **adaptación y evolución profesional** de un trabajo grupal realizado originalmente para la asignatura *Introducción a los Sistemas Operativos*. La versión presente en este repositorio ha sido refactorizada íntegramente para transformar un script académico en una herramienta de infraestructura agnóstica, segura y alineada con estándares modernos de despliegue.
+Este proyecto es una **adaptación y evolución profesional** de un trabajo grupal realizado originalmente para la asignatura *Introducción a los Sistemas Operativos* en el grado de Ingeniería Informática de Gestión y Sistemas de Información. La versión presente en este repositorio ha sido refactorizada íntegramente para transformar un script académico en una herramienta de infraestructura agnóstica, segura y alineada con estándares modernos de despliegue.
 
 ## 🚀 Descripción
 Herramienta de automatización basada en Bash (Infraestructura como Código) diseñada para el aprovisionamiento de servidores Linux (Ubuntu/Debian) y el despliegue de aplicaciones web Python (Flask/WSGI) bajo un stack **LEMP/LNMP**.
