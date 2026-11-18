@@ -15,16 +15,39 @@ read -p "Introduce el nombre del archivo SQL de volcado (ej: script.sql) [Deja e
 
 readonly PROJECT_DIR="/var/www/$PROJECT_NAME"
 
+function irAlProyecto()
+{
+	# Entra en el directorio del proyecto. Si no existe o no es accesible, avisa y
+	# devuelve error para que la opción se detenga en lugar de seguir trabajando
+	# en el directorio equivocado.
+	if ! cd "$PROJECT_DIR" 2>/dev/null; then
+		echo "❌ No se pudo acceder a $PROJECT_DIR. Crea la ubicación (opción 2) y clona el repositorio (opción 0)."
+		read -p "Pulsa ENTER para continuar..."
+		return 1
+	fi
+}
+
 function desplegarCodigoFuente()
 {
 	echo "🔄 Descargando código de la aplicación..."
 	read -p "Introduce la URL de clonado del repositorio (HTTPS): " repo_url
-	cd $PROJECT_DIR > /dev/null 2>&1
+
+	# Crea el directorio del proyecto si aún no existe, para no depender de la opción 2
+	if [ ! -d "$PROJECT_DIR" ]; then
+		sudo mkdir -p "$PROJECT_DIR" && sudo chown "$USER:$USER" "$PROJECT_DIR"
+	fi
+	irAlProyecto || return 1
+
+	if [ -n "$(ls -A)" ]; then
+		echo "⚠️  $PROJECT_DIR no está vacío. Usa la opción 2 para recrearlo antes de clonar."
+		read -p "Pulsa ENTER para continuar..."
+		return 1
+	fi
 
 	if git clone "$repo_url" . ; then
 		echo "✅ Código desplegado correctamente en el servidor."
 	else
-		echo "❌ Error al descargar el repositorio. Verifica la URL."
+		echo "❌ Error al clonar el repositorio. Revisa la URL y la conexión a internet."
 	fi
 
 	read -p "Pulsa ENTER para continuar..."
@@ -196,7 +219,7 @@ function ejecutarEntornoVirtual()
 		return
 	fi
 
-	cd $PROJECT_DIR > /dev/null 2>&1
+	irAlProyecto || return 1
 	echo "🔄 Creando entorno virtual venv..."
 	python3 -m venv venv > /dev/null 2>&1
 	if [ $? -eq 0 ]; then
@@ -220,7 +243,7 @@ function instalarLibreriasEntornoVirtual()
 {
 	# Activa el entorno virtual e instala las librerías requeridas del proyecto
 	echo "🔄 Instalando librerías en el entorno virtual..."
-	cd $PROJECT_DIR > /dev/null 2>&1
+	irAlProyecto || return 1
 	source venv/bin/activate > /dev/null 2>&1
 	python -m pip install --upgrade pip > /dev/null 2>&1
 	pip install -r requirements.txt > /dev/null 2>&1
@@ -499,7 +522,7 @@ function instalarGunicorn()
 { 
 	# Activa el entorno virtual y instala Gunicorn para servir la aplicación Flask
 	echo "🔄 Instalando Gunicorn..."
-	cd $PROJECT_DIR > /dev/null 2>&1
+	irAlProyecto || return 1
 	source venv/bin/activate > /dev/null 2>&1
 	pip install --upgrade pip gunicorn > /dev/null 2>&1
 	if [ $? -eq 0 ]; then
@@ -515,7 +538,7 @@ function configurarGunicorn()
 	# Configura Gunicorn creando el archivo wsgi.py para lanzar la aplicación Flask
 	# Luego, ejecuta Gunicorn en el puerto 5000 y abre Firefox en localhost
 	echo "🔄 Configurando Gunicorn service..."
-	cd $PROJECT_DIR > /dev/null 2>&1
+	irAlProyecto || return 1
 	source venv/bin/activate > /dev/null 2>&1
 
 	local wsgi="wsgi.py"
