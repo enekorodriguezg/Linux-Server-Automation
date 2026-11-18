@@ -14,6 +14,30 @@ read -p "Introduce el nombre de la instancia Flask (ej: app, main, run): " FLASK
 read -p "Introduce el nombre del archivo SQL de volcado (ej: script.sql) [Deja en blanco si no se usa]: " SQL_FILE
 
 readonly PROJECT_DIR="/var/www/$PROJECT_NAME"
+readonly NGINX_PORT=3128     # Puerto público: Nginx como proxy inverso de la aplicación
+readonly GUNICORN_PORT=5000  # Puerto interno: Gunicorn, solo accesible desde la propia máquina
+
+function abrirNavegador()
+{
+	# Abre la URL en Google Chrome (o Chromium). El script se ejecuta con sudo y Chrome
+	# no arranca como root, así que se lanza como el usuario que invocó sudo.
+	# En servidores sin entorno gráfico se limita a mostrar la URL.
+	local url="$1"
+	local navegador
+	navegador=$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)
+
+	if [ -z "$navegador" ] || [ -z "$DISPLAY$WAYLAND_DISPLAY" ]; then
+		echo "ℹ️  No hay Chrome o entorno gráfico disponible. Abre $url desde tu navegador."
+		return 0
+	fi
+
+	if [ -n "$SUDO_USER" ] && [ "$(id -u)" -eq 0 ]; then
+		sudo -u "$SUDO_USER" "$navegador" "$url" > /dev/null 2>&1 &
+	else
+		"$navegador" "$url" > /dev/null 2>&1 &
+	fi
+	echo "✅ Chrome abierto en $url"
+}
 
 function irAlProyecto()
 {
@@ -258,25 +282,41 @@ function instalarLibreriasEntornoVirtual()
 function probandotodoconservidordedesarrollodeflask()
 {
 	# Función de depuración. No recomendada para entornos de producción.
-    echo "⚠️ MODO DEBUG: Iniciando servidor de desarrollo integrado de Flask..."
-    echo "❌ Advertencia: No usar como servicio final."
-    
+	echo "⚠️ MODO DEBUG: Iniciando servidor de desarrollo integrado de Flask..."
+	echo "❌ Advertencia: No usar como servicio final."
+	irAlProyecto || return 1
 
-    python3 "$PROJECT_DIR/${FLASK_APP_NAME}.py" > /dev/null 2>&1 &
-    PID=$!
-    sleep 2
-    
-    if ps -p $PID > /dev/null 2>&1; then
-        echo "✅ Servidor Flask de prueba corriendo (PID $PID) en el puerto 5000."
-        echo "   Para comprobarlo desde otra terminal, ejecuta: curl http://127.0.0.1:5000"
-        echo "   Pulsa CTRL+C para detener el servidor de prueba."
-        
-        wait $PID
-    else
-        echo "❌ No se pudo iniciar el servidor Flask de prueba."
-        echo "   Comprueba que $FLASK_APP_NAME.py existe en $PROJECT_DIR."
-    fi
-    read -p "Pulsa ENTER para continuar..."
+	# Usa el Python del entorno virtual (donde están las dependencias) si ya existe
+	local python="python3"
+	[ -x "venv/bin/python" ] && python="venv/bin/python"
+
+	# Cada aplicación elige su puerto, así que se detecta comparando los puertos
+	# en escucha antes y después de arrancarla
+	local antes despues puerto
+	antes=$(ss -ltnH 2>/dev/null | awk '{print $4}' | sort)
+	"$python" "${FLASK_APP_NAME}.py" > /dev/null 2>&1 &
+	PID=$!
+
+	for _ in $(seq 1 15); do
+		sleep 1
+		ps -p $PID > /dev/null 2>&1 || break
+		despues=$(ss -ltnH 2>/dev/null | awk '{print $4}' | sort)
+		puerto=$(comm -13 <(echo "$antes") <(echo "$despues") | head -1 | awk -F: '{print $NF}')
+		[ -n "$puerto" ] && break
+	done
+
+	if ps -p $PID > /dev/null 2>&1; then
+		echo "✅ Servidor Flask de prueba corriendo (PID $PID) en el puerto ${puerto:-desconocido}."
+		[ -n "$puerto" ] && echo "   Para comprobarlo desde otra terminal, ejecuta: curl http://127.0.0.1:$puerto"
+		read -p "Pulsa ENTER para detener el servidor de prueba..."
+		pkill -P $PID > /dev/null 2>&1
+		kill $PID > /dev/null 2>&1
+		echo "💀 Servidor de prueba detenido."
+	else
+		echo "❌ No se pudo iniciar el servidor Flask de prueba."
+		echo "   Comprueba que $FLASK_APP_NAME.py existe en $PROJECT_DIR."
+		read -p "Pulsa ENTER para continuar..."
+	fi
 }
 
 function instalarNGINX()
@@ -340,14 +380,9 @@ function testearPuertosNGINX()
 
 function visualizarIndex()
 { 
-	# Abre el navegador Firefox en la URL local del servidor NGINX (localhost)
-	echo "🔄 Abriendo index en Firefox... (Se recomienda Chromium)"
-	firefox http://127.0.0.1 > /dev/null 2>&1 &
-	if [ $? -eq 0 ]; then
-		echo "✅ Firefox abierto en http://localhost"
-	else
-		echo "❌ No se pudo abrir Firefox."
-	fi
+	# Abre en el navegador la página por defecto de NGINX (puerto 80)
+	echo "🔄 Abriendo index de NGINX..."
+	abrirNavegador "http://127.0.0.1"
 	read -p "Pulsa ENTER para continuar..."
 }
 
@@ -536,7 +571,7 @@ function instalarGunicorn()
 function configurarGunicorn()
 { 
 	# Configura Gunicorn creando el archivo wsgi.py para lanzar la aplicación Flask
-	# Luego, ejecuta Gunicorn en el puerto 5000 y abre Firefox en localhost
+	# Luego, ejecuta Gunicorn en el puerto interno y abre la aplicación en el navegador
 	echo "🔄 Configurando Gunicorn service..."
 	irAlProyecto || return 1
 	source venv/bin/activate > /dev/null 2>&1
@@ -554,18 +589,25 @@ EOF
 		read -p "Pulsa ENTER para continuar..."
 	fi
 	echo "▶️  Iniciando Gunicorn..."
-	echo "🔄 Comprobando puerto 5000..."
-	if sudo lsof -i :5000 -t > /dev/null; then
-		echo "⚠️  Puerto 5000 ocupado, liberando..."
-		sudo kill -9 $(sudo lsof -i :5000 -t) > /dev/null 2>&1
-		echo "✅ Puerto 5000 liberado."
+	echo "🔄 Comprobando puerto $GUNICORN_PORT..."
+	if sudo lsof -i :$GUNICORN_PORT -t > /dev/null; then
+		echo "⚠️  Puerto $GUNICORN_PORT ocupado, liberando..."
+		sudo kill -9 $(sudo lsof -i :$GUNICORN_PORT -t) > /dev/null 2>&1
+		echo "✅ Puerto $GUNICORN_PORT liberado."
 	fi
-	echo "Pulsa CTRL+C para terminar gunicorn"
-	gunicorn --bind 127.0.0.1:5000 wsgi:app & > /dev/null 2>&1
-	echo "Abriendo Firefox."
-	firefox 127.0.0.1:5000 
-	echo "💀 Gunicorn fue terminado"
-	read -p "Pulsa ENTER para continuar..."
+	gunicorn --bind 127.0.0.1:$GUNICORN_PORT wsgi:app > /dev/null 2>&1 &
+	local gunicorn_pid=$!
+	sleep 2
+	if ps -p $gunicorn_pid > /dev/null 2>&1; then
+		echo "✅ Gunicorn en marcha en http://127.0.0.1:$GUNICORN_PORT"
+		abrirNavegador "http://127.0.0.1:$GUNICORN_PORT"
+		read -p "Pulsa ENTER para detener Gunicorn..."
+		kill $gunicorn_pid > /dev/null 2>&1
+		echo "💀 Gunicorn detenido."
+	else
+		echo "❌ Gunicorn no pudo arrancar. Comprueba wsgi.py y la instancia Flask ($FLASK_APP_NAME)."
+		read -p "Pulsa ENTER para continuar..."
+	fi
 }
 
 function pasarPropiedadyPermisos()
@@ -597,7 +639,7 @@ function crearServicioSystemd()
 	Group=www-data
 	WorkingDirectory=$PROJECT_DIR
 	Environment="PATH=$PROJECT_DIR/venv/bin"
-	ExecStart=$PROJECT_DIR/venv/bin/gunicorn --bind 127.0.0.1:5000 wsgi:app
+	ExecStart=$PROJECT_DIR/venv/bin/gunicorn --bind 127.0.0.1:$GUNICORN_PORT wsgi:app
 	Restart=always
 
 	[Install]
@@ -623,7 +665,7 @@ EOF
 
 function configurarNginxProxyInverso()
 { 
-	# Configura NGINX como proxy inverso para redirigir tráfico desde el puerto 3128 hacia el puerto 5000 (donde Gunicorn sirve Flask)
+	# Configura NGINX como proxy inverso para redirigir tráfico desde el puerto público (NGINX_PORT) hacia el puerto interno de Gunicorn (GUNICORN_PORT)
 	local conf_path="/etc/nginx/conf.d/$PROJECT_NAME.conf"
 	if [ -f "$conf_path" ]; then
 		echo "⚠️  El archivo $conf_path ya existe. No se ha hecho ninguna modificación."
@@ -632,11 +674,11 @@ function configurarNginxProxyInverso()
 		echo "Creando configuración de Nginx para formulario de citas..."
 		sudo tee "$conf_path" > /dev/null <<EOF
 		server {
-		    listen 3128;
+		    listen $NGINX_PORT;
 		    server_name localhost;
 		    location / {
 			include proxy_params;
-			proxy_pass  http://127.0.0.1:5000;
+			proxy_pass  http://127.0.0.1:$GUNICORN_PORT;
 		    }
 		}
 EOF
@@ -673,22 +715,21 @@ function rearrancarNginx()
 
 function testearVirtualHost()
 { 
-	# Realiza una prueba para verificar que el servicio esté funcionando correctamente
-	# Redirige al navegador para comprobar que se pueda acceder a la aplicación
-	echo "🔄 Comprobando puerto 80..."
-	if sudo lsof -i :80 -t > /dev/null; then
-		echo "⚠️  Puerto 80 ocupado, liberando..."
-		sudo kill -9 $(sudo lsof -i :80 -t) > /dev/null 2>&1
-		echo "✅ Puerto 80 liberado."
+	# Comprueba que NGINX sirve la aplicación en el puerto del virtual host y la abre en el navegador.
+	# No detiene ningún proceso: el puerto lo ocupa el propio NGINX, que es justo lo que se quiere probar.
+	local url="http://127.0.0.1:$NGINX_PORT"
+	echo "🔄 Comprobando el virtual host en $url..."
+	if command -v curl > /dev/null; then
+		local codigo
+		codigo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url")
+		if [ "$codigo" = "200" ]; then
+			echo "✅ La aplicación responde correctamente (HTTP $codigo)."
+		else
+			[ "$codigo" = "000" ] && codigo="sin respuesta" || codigo="HTTP $codigo"
+			echo "❌ La aplicación no responde bien ($codigo). Revisa que NGINX (opción 20) y el servicio $PROJECT_NAME estén activos."
+		fi
 	fi
-
-	echo "🔄 Iniciando prueba en http://127.0.0.1:80..."
-	firefox http://127.0.0.1:80 > /dev/null 2>&1 &
-	if [ $? -eq 0 ]; then
-		echo "✅ Firefox abierto en http://127.0.0.1:80"
-	else
-		echo "❌ No se pudo abrir Firefox."
-	fi
+	abrirNavegador "$url"
 	read -p "Pulsa ENTER para continuar..."
 }
 function verNginxLogs()
